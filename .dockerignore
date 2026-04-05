@@ -13,6 +13,12 @@ build-fuzz*
 build-asan*
 build_bench
 ci
+!ci/retry/
+!ci/retry/retry
+!ci/test/
+!ci/test/00_setup_env.sh
+!ci/test/00_setup_env_*.sh
+!ci/test/01_base_install.sh
 .ci-*
 *.venv
 venv
