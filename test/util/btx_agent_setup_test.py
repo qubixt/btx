@@ -438,7 +438,7 @@ class BTXAgentSetupTest(unittest.TestCase):
             manifest_path = self._write_manifest(root, archive_path)
             checksum_path = root / "SHA256SUMS"
             snapshot_manifest_path = root / "snapshot.manifest.json"
-            api_prefix = "https://api.github.com/repos/btxchain/btx-node"
+            api_prefix = "https://api.github.com/repos/btxchain/btx"
             release_url = f"{api_prefix}/releases/tags/v29.2"
             asset_urls = {
                 manifest_path.name: f"{api_prefix}/releases/assets/1",
@@ -471,7 +471,7 @@ class BTXAgentSetupTest(unittest.TestCase):
                         exit_code = self.module.main(
                             [
                                 "--repo",
-                                "btxchain/btx-node",
+                                "btxchain/btx",
                                 "--release-tag",
                                 "v29.2",
                                 "--platform",
@@ -515,9 +515,9 @@ class BTXAgentSetupTest(unittest.TestCase):
             manifest_path = self._write_manifest(root, archive_path)
             checksum_path = root / "SHA256SUMS"
             snapshot_manifest_path = root / "snapshot.manifest.json"
-            api_prefix = "https://api.github.com/repos/btxchain/btx-node"
+            api_prefix = "https://api.github.com/repos/btxchain/btx"
             manifest_url = (
-                "https://github.com/btxchain/btx-node/releases/download/v29.2/"
+                "https://github.com/btxchain/btx/releases/download/v29.2/"
                 f"{manifest_path.name}"
             )
             release_url = f"{api_prefix}/releases/tags/v29.2"
@@ -618,7 +618,7 @@ class BTXAgentSetupTest(unittest.TestCase):
                 self.module.shutil.which = fake_which
                 self.module.subprocess.run = fake_run
                 output = self.module.download_to_path(
-                    "https://api.github.com/repos/btxchain/btx-node/releases/assets/123",
+                    "https://api.github.com/repos/btxchain/btx/releases/assets/123",
                     destination,
                     headers={"Authorization": "Bearer token", "Accept": "application/octet-stream"},
                 )
@@ -660,7 +660,7 @@ class BTXAgentSetupTest(unittest.TestCase):
             self.module.shutil.which = fake_which
             self.module.subprocess.run = fake_run
             payload = self.module.load_json_source(
-                "https://api.github.com/repos/btxchain/btx-node/releases/assets/999",
+                "https://api.github.com/repos/btxchain/btx/releases/assets/999",
                 headers=self.module.github_download_headers("token"),
             )
         finally:
@@ -698,7 +698,7 @@ class BTXAgentSetupTest(unittest.TestCase):
             self.module.shutil.which = fake_which
             self.module.subprocess.run = fake_run
             payload = self.module.load_json_source(
-                "https://api.github.com/repos/btxchain/btx-node/releases/tags/v29.2",
+                "https://api.github.com/repos/btxchain/btx/releases/tags/v29.2",
                 headers=self.module.github_api_headers("token", accept=self.module.GITHUB_JSON_ACCEPT),
             )
         finally:

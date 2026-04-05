@@ -201,7 +201,7 @@ bundle directory using the token stored in `github.key`:
 
 ```bash
 python3 scripts/release/publish_github_release.py \
-  --repo btxchain/btx-node \
+  --repo btxchain/btx \
   --tag v29.2-btx1 \
   --bundle-dir /tmp/btx-release-bundle \
   --body-file /tmp/release-notes.md \

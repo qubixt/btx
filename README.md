@@ -477,7 +477,7 @@ The shortest operator path is:
 export GH_TOKEN="$(<github.key)"  # only needed for private GitHub releases
 
 python3 contrib/faststart/btx-agent-setup.py \
-  --repo btxchain/btx-node \
+  --repo btxchain/btx \
   --release-tag v29.2-btx1 \
   --preset service \
   --datadir="$HOME/.btx"

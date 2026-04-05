@@ -64,7 +64,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 args = self.module.parse_args(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -85,7 +85,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 exit_code = self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -96,7 +96,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             payload = json.loads(output.getvalue())
-            self.assertEqual(payload["repo"], "btxchain/btx-node")
+            self.assertEqual(payload["repo"], "btxchain/btx")
             self.assertEqual(payload["tag"], "v29.2")
             self.assertEqual(
                 payload["assets"],
@@ -136,7 +136,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 exit_code = self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -222,7 +222,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -242,7 +242,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                     self.module.main(
                         [
                             "--repo",
-                            "btxchain/btx-node",
+                            "btxchain/btx",
                             "--tag",
                             "v29.2",
                             "--bundle-dir",
@@ -282,7 +282,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 exit_code = self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -330,7 +330,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 exit_code = self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -355,7 +355,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 self.module.main(
                     [
                         "--repo",
-                        "btxchain/btx-node",
+                        "btxchain/btx",
                         "--tag",
                         "v29.2",
                         "--bundle-dir",
@@ -375,7 +375,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
                 return Result()
 
             self.module.subprocess.run = fake_run
-            self.assertIsNone(self.module.get_release("btxchain/btx-node", "v29.2", "token"))
+            self.assertIsNone(self.module.get_release("btxchain/btx", "v29.2", "token"))
         finally:
             self.module.subprocess.run = original_run
 
@@ -391,7 +391,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
 
             self.module.subprocess.run = fake_run
             with self.assertRaisesRegex(RuntimeError, "Unexpected HTTP 500"):
-                self.module.get_release("btxchain/btx-node", "v29.2", "token")
+                self.module.get_release("btxchain/btx", "v29.2", "token")
         finally:
             self.module.subprocess.run = original_run
 
@@ -448,7 +448,7 @@ class PublishGitHubReleaseTest(unittest.TestCase):
 
             self.module.subprocess.run = fake_run
             with self.assertRaisesRegex(RuntimeError, "delete failed"):
-                self.module.delete_asset("btxchain/btx-node", 7, "token")
+                self.module.delete_asset("btxchain/btx", 7, "token")
         finally:
             self.module.subprocess.run = original_run
 

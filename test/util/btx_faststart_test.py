@@ -264,9 +264,9 @@ class BTXFaststartTest(unittest.TestCase):
             self.assertEqual(self.module.github_token_from_env(), "btx-token")
 
     def test_snapshot_manifest_download_uses_github_asset_api_with_token(self):
-        manifest_url = "https://github.com/btxchain/btx-node/releases/download/v29.2/snapshot.manifest.json"
-        release_url = "https://api.github.com/repos/btxchain/btx-node/releases/tags/v29.2"
-        asset_url = "https://api.github.com/repos/btxchain/btx-node/releases/assets/1"
+        manifest_url = "https://github.com/btxchain/btx/releases/download/v29.2/snapshot.manifest.json"
+        release_url = "https://api.github.com/repos/btxchain/btx/releases/tags/v29.2"
+        asset_url = "https://api.github.com/repos/btxchain/btx/releases/assets/1"
         recorded_requests: list[tuple[str, dict[str, str]]] = []
 
         class Response(io.BytesIO):
@@ -323,9 +323,9 @@ class BTXFaststartTest(unittest.TestCase):
         self.assertEqual(recorded_requests[1][1].get("accept"), self.module.GITHUB_BINARY_ACCEPT)
 
     def test_download_snapshot_uses_github_asset_api_with_token(self):
-        snapshot_url = "https://github.com/btxchain/btx-node/releases/download/v29.2/snapshot.dat"
-        release_url = "https://api.github.com/repos/btxchain/btx-node/releases/tags/v29.2"
-        asset_url = "https://api.github.com/repos/btxchain/btx-node/releases/assets/2"
+        snapshot_url = "https://github.com/btxchain/btx/releases/download/v29.2/snapshot.dat"
+        release_url = "https://api.github.com/repos/btxchain/btx/releases/tags/v29.2"
+        asset_url = "https://api.github.com/repos/btxchain/btx/releases/assets/2"
         snapshot_bytes = b"snapshot-bytes\n"
         recorded_requests: list[tuple[str, dict[str, str]]] = []
 
@@ -401,13 +401,13 @@ class BTXFaststartTest(unittest.TestCase):
             self.module.open_url = fake_open_url
             self.module.download_with_curl = fake_download_with_curl
             self.module.github_release_headers = lambda _source: (
-                "https://api.github.com/repos/btxchain/btx-node/releases/assets/2",
+                "https://api.github.com/repos/btxchain/btx/releases/assets/2",
                 self.module.github_api_headers("test-token", accept=self.module.GITHUB_BINARY_ACCEPT),
             )
             with tempfile.TemporaryDirectory() as tmpdir:
                 destination = pathlib.Path(tmpdir) / "snapshot.dat"
                 self.module.download_snapshot(
-                    "https://github.com/btxchain/btx-node/releases/download/v29.2/snapshot.dat",
+                    "https://github.com/btxchain/btx/releases/download/v29.2/snapshot.dat",
                     destination,
                     self.module.hashlib.sha256(b"snapshot-bytes\n").hexdigest(),
                 )
@@ -420,7 +420,7 @@ class BTXFaststartTest(unittest.TestCase):
         self.assertEqual(len(recorded), 1)
         self.assertEqual(
             recorded[0][0],
-            "https://api.github.com/repos/btxchain/btx-node/releases/assets/2",
+            "https://api.github.com/repos/btxchain/btx/releases/assets/2",
         )
         self.assertEqual(recorded[0][2]["Accept"], self.module.GITHUB_BINARY_ACCEPT)
         self.assertEqual(recorded[0][2]["Authorization"], "Bearer test-token")
