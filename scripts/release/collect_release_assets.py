@@ -56,6 +56,7 @@ PLATFORM_ALIASES = {
     "macos-arm64": ("arm64-apple-darwin", "aarch64-apple-darwin"),
 }
 DEFAULT_REQUIRED_PLATFORMS = tuple(PLATFORM_ALIASES.keys())
+DEFAULT_SIGNATURE_PUBLIC_KEY_NAME = "BTX-RELEASE-PUBKEY.asc"
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,28 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def source_date_epoch() -> int | None:
+    raw_value = os.environ.get("SOURCE_DATE_EPOCH")
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        epoch = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"SOURCE_DATE_EPOCH must be an integer, got: {raw_value!r}") from exc
+    if epoch < 0:
+        raise ValueError(f"SOURCE_DATE_EPOCH must be non-negative, got: {epoch}")
+    return epoch
+
+
+def generated_timestamp_utc() -> str:
+    epoch = source_date_epoch()
+    if epoch is None:
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0)
+    else:
+        timestamp = datetime.fromtimestamp(epoch, tz=timezone.utc)
+    return timestamp.isoformat().replace("+00:00", "Z")
 
 
 def load_json_object(path: Path, label: str) -> dict[str, object]:
@@ -220,6 +243,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Optional signed checksum file to stage as SHA256SUMS.asc.",
     )
     parser.add_argument(
+        "--signature-public-key",
+        help=(
+            "Optional armored public key to stage for checksum verification. "
+            f"Defaults to auto-export as {DEFAULT_SIGNATURE_PUBLIC_KEY_NAME} when --sign-with is used."
+        ),
+    )
+    parser.add_argument(
         "--gpg",
         default="gpg",
         help="GPG binary to use when signing SHA256SUMS (default: gpg).",
@@ -311,6 +341,42 @@ def stage_snapshot_artifacts(args: argparse.Namespace, dest_dir: Path) -> list[t
     return staged
 
 
+def export_public_key(
+    gpg_bin: str,
+    sign_with: str,
+    destination: Path,
+) -> Path:
+    result = subprocess.run(
+        [gpg_bin, "--armor", "--output", str(destination), "--export", sign_with],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "gpg --export failed"
+        raise RuntimeError(f"Failed to export public key for {sign_with}: {message}")
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError(f"Exported public key is missing or empty: {destination}")
+    return destination
+
+
+def stage_signature_public_key(args: argparse.Namespace, dest_dir: Path) -> tuple[list[tuple[str, Path]], str | None]:
+    staged: list[tuple[str, Path]] = []
+    public_key_name: str | None = None
+
+    if args.signature_public_key:
+        source_path = Path(args.signature_public_key)
+        staged_path = stage_file(source_path, dest_dir, dest_name=DEFAULT_SIGNATURE_PUBLIC_KEY_NAME)
+        staged.append((str(source_path), staged_path))
+        public_key_name = staged_path.name
+    elif args.sign_with:
+        destination = dest_dir / DEFAULT_SIGNATURE_PUBLIC_KEY_NAME
+        staged_path = export_public_key(args.gpg, args.sign_with, destination)
+        staged.append((f"gpg:{args.sign_with}", staged_path))
+        public_key_name = staged_path.name
+
+    return staged, public_key_name
+
+
 def build_attestation_asset_name(signer: str, file_name: str) -> str:
     return f"guix-attestations-{signer}-{file_name}"
 
@@ -378,6 +444,7 @@ def build_manifest(
     staged_assets: list[tuple[str, Path]],
     release_manifest_path: Path,
     checksum_name: str,
+    signature_public_key_name: str | None = None,
     attestation_assets: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     manifest_assets = []
@@ -398,11 +465,12 @@ def build_manifest(
 
     return {
         "format_version": 1,
-        "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "generated_at_utc": generated_timestamp_utc(),
         "release_tag": args.release_tag,
         "release_name": args.release_name,
         "checksum_file": checksum_name,
         "signature_file": "SHA256SUMS.asc" if (args.checksum_signature or args.sign_with) else None,
+        "signature_public_key": signature_public_key_name,
         "snapshot_manifest": "snapshot.manifest.json" if args.snapshot_manifest else None,
         "snapshot_asset": "snapshot.dat" if args.snapshot else None,
         "platform_assets": platform_assets,
@@ -478,6 +546,8 @@ def main(argv: list[str]) -> int:
     staged_assets: list[tuple[str, Path]] = []
     staged_assets.extend(collect_sources(list(args.source), bundle_dir))
     staged_assets.extend(stage_snapshot_artifacts(args, bundle_dir))
+    signature_key_staged, signature_public_key_name = stage_signature_public_key(args, bundle_dir)
+    staged_assets.extend(signature_key_staged)
     attestation_staged, attestation_assets = stage_attestation_artifacts(
         list(args.attestations_dir),
         bundle_dir,
@@ -490,6 +560,7 @@ def main(argv: list[str]) -> int:
         staged_assets,
         release_manifest_path,
         args.checksum_name,
+        signature_public_key_name=signature_public_key_name,
         attestation_assets=attestation_assets,
     )
     validate_required_platforms(

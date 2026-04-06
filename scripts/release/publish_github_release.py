@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from urllib.parse import quote
 from typing import Any
 
@@ -173,7 +174,7 @@ def validate_manifest_contract(manifest: dict[str, Any], checksums: dict[str, st
                     f"{RELEASE_MANIFEST_NAME} references asset not present in {CHECKSUM_FILE_NAME}: {asset_name}"
                 )
 
-    for field_name in ("snapshot_asset", "snapshot_manifest"):
+    for field_name in ("snapshot_asset", "snapshot_manifest", "signature_public_key"):
         asset_name = manifest.get(field_name)
         if asset_name is None:
             continue
@@ -205,12 +206,33 @@ def validate_manifest_contract(manifest: dict[str, Any], checksums: dict[str, st
             referenced_assets.add(asset_name)
 
 
-def verify_checksum_signature(checksum_path: Path, signature_path: Path, gpg_bin: str) -> None:
-    result = subprocess.run(
-        [gpg_bin, "--verify", str(signature_path), str(checksum_path)],
-        capture_output=True,
-        text=True,
-    )
+def verify_checksum_signature(
+    checksum_path: Path,
+    signature_path: Path,
+    gpg_bin: str,
+    public_key_path: Path | None = None,
+) -> None:
+    env = os.environ.copy()
+    with tempfile.TemporaryDirectory(prefix="btx-release-gpg-home-") as temp_home:
+        if public_key_path is not None:
+            env["GNUPGHOME"] = temp_home
+            import_result = subprocess.run(
+                [gpg_bin, "--batch", "--import", str(public_key_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if import_result.returncode != 0:
+                message = import_result.stderr.strip() or import_result.stdout.strip() or "gpg --import failed"
+                raise RuntimeError(
+                    f"Checksum signature verification failed while importing {public_key_path.name}: {message}"
+                )
+        result = subprocess.run(
+            [gpg_bin, "--verify", str(signature_path), str(checksum_path)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "gpg --verify failed"
         raise RuntimeError(f"Checksum signature verification failed for {signature_path.name}: {message}")
@@ -220,6 +242,8 @@ def verify_bundle_signature(bundle_dir: Path, manifest: dict[str, Any], gpg_bin:
     checksum_path = bundle_dir / CHECKSUM_FILE_NAME
     signature_file = manifest.get("signature_file")
     signature_path = bundle_dir / "SHA256SUMS.asc"
+    public_key_file = manifest.get("signature_public_key")
+    public_key_path = bundle_dir / public_key_file if isinstance(public_key_file, str) and public_key_file else None
 
     if isinstance(signature_file, str) and signature_file:
         signature_path = bundle_dir / signature_file
@@ -227,11 +251,11 @@ def verify_bundle_signature(bundle_dir: Path, manifest: dict[str, Any], gpg_bin:
             raise FileNotFoundError(
                 f"Bundle directory is missing declared signature file {signature_file}: {bundle_dir}"
             )
-        verify_checksum_signature(checksum_path, signature_path, gpg_bin)
+        verify_checksum_signature(checksum_path, signature_path, gpg_bin, public_key_path=public_key_path)
         return
 
     if signature_path.is_file():
-        verify_checksum_signature(checksum_path, signature_path, gpg_bin)
+        verify_checksum_signature(checksum_path, signature_path, gpg_bin, public_key_path=public_key_path)
 
 
 def curl_json(method: str, url: str, token: str | None = None, payload: dict[str, Any] | None = None) -> Any:

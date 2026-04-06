@@ -59,6 +59,24 @@ def default_smoke_install_dir(bundle_dir: Path, platform_id: str) -> Path:
     return bundle_dir.parent / f"{bundle_dir.name}-smoke-{platform_id}"
 
 
+def derived_release_env(repo_root: Path, tag: str) -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("SOURCE_DATE_EPOCH"):
+        return env
+
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "log", "-1", "--format=%ct", f"{tag}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    source_date_epoch = result.stdout.strip()
+    if not source_date_epoch:
+        raise RuntimeError(f"Could not derive SOURCE_DATE_EPOCH from tag: {tag}")
+    env["SOURCE_DATE_EPOCH"] = source_date_epoch
+    return env
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="btxchain/btx", help="GitHub repository in owner/name form.")
@@ -442,6 +460,7 @@ def main(argv: list[str]) -> int:
     repo_root = Path(args.repo_root).resolve()
     bundle_dir = Path(args.bundle_dir).resolve()
     hosts = resolve_guix_hosts(args)
+    release_env = derived_release_env(repo_root, args.tag)
 
     maybe_run_guix_build(args, repo_root, hosts)
     guix_output_dir = resolve_guix_output_dir(args, repo_root)
@@ -463,19 +482,19 @@ def main(argv: list[str]) -> int:
         snapshot,
         snapshot_manifest,
     )
-    run_checked(collect_command, cwd=repo_root)
+    run_checked(collect_command, cwd=repo_root, env=release_env)
 
     dry_run_publish_command = build_publish_command(args, repo_root, dry_run=True)
-    run_checked(dry_run_publish_command, cwd=repo_root)
+    run_checked(dry_run_publish_command, cwd=repo_root, env=release_env)
 
     smoke_install_command = build_smoke_install_command(args, repo_root)
     if smoke_install_command is not None:
-        run_checked(smoke_install_command, cwd=repo_root)
+        run_checked(smoke_install_command, cwd=repo_root, env=release_env)
 
     published = False
     if args.publish:
         publish_command = build_publish_command(args, repo_root, dry_run=False)
-        run_checked(publish_command, cwd=repo_root)
+        run_checked(publish_command, cwd=repo_root, env=release_env)
         published = True
 
     summary = {

@@ -15,6 +15,8 @@ BTX release snapshots are published as a small bundle:
   snapshot SHA256
 - `SHA256SUMS` and `SHA256SUMS.asc`: checksum and signing artifacts for the
   release payloads
+- `BTX-RELEASE-PUBKEY.asc`: the armored public key used to verify
+  `SHA256SUMS.asc` when the release is signed
 - optional signer-qualified Guix attestation assets published alongside the
   release bundle for build provenance
 

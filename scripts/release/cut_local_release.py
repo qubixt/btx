@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -99,8 +100,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_checked(command: list[str], *, cwd: Path | None = None) -> None:
-    subprocess.run(command, cwd=str(cwd) if cwd else None, check=True)
+def derived_release_env(repo_root: Path, tag: str) -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("SOURCE_DATE_EPOCH"):
+        return env
+
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "log", "-1", "--format=%ct", f"{tag}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    source_date_epoch = result.stdout.strip()
+    if not source_date_epoch:
+        raise RuntimeError(f"Could not derive SOURCE_DATE_EPOCH from tag: {tag}")
+    env["SOURCE_DATE_EPOCH"] = source_date_epoch
+    return env
+
+
+def run_checked(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+    subprocess.run(command, cwd=str(cwd) if cwd else None, env=env, check=True)
 
 
 def parse_platform_spec(raw_spec: str) -> dict[str, Path | str]:
@@ -265,6 +284,7 @@ def main(argv: list[str]) -> int:
     bundle_dir = Path(args.bundle_dir).resolve()
     platform_specs = resolve_platform_specs(list(args.platform_spec))
     platform_ids = [str(spec["platform_id"]) for spec in platform_specs]
+    release_env = derived_release_env(repo_root, args.tag)
 
     if (args.snapshot is None) != (args.snapshot_manifest is None):
         raise ValueError("snapshot.dat and snapshot.manifest.json must be provided together")
@@ -281,19 +301,20 @@ def main(argv: list[str]) -> int:
                     spec=spec,
                 ),
                 cwd=repo_root,
+                env=release_env,
             )
 
-        run_checked(build_collect_command(args, repo_root, archive_dir, platform_ids), cwd=repo_root)
+        run_checked(build_collect_command(args, repo_root, archive_dir, platform_ids), cwd=repo_root, env=release_env)
 
-    run_checked(build_publish_command(args, repo_root, dry_run=True), cwd=repo_root)
+    run_checked(build_publish_command(args, repo_root, dry_run=True), cwd=repo_root, env=release_env)
 
     smoke_install_command = build_smoke_install_command(args, repo_root)
     if smoke_install_command is not None:
-        run_checked(smoke_install_command, cwd=repo_root)
+        run_checked(smoke_install_command, cwd=repo_root, env=release_env)
 
     published = False
     if args.publish:
-        run_checked(build_publish_command(args, repo_root, dry_run=False), cwd=repo_root)
+        run_checked(build_publish_command(args, repo_root, dry_run=False), cwd=repo_root, env=release_env)
         published = True
 
     summary = {

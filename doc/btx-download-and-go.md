@@ -28,9 +28,10 @@ python3 contrib/faststart/btx-agent-setup.py \
 
 That one command installs the correct platform archive from the published
 `btx-release-manifest.json`, verifies the manifest/archive/snapshot-manifest
-against `SHA256SUMS` and `SHA256SUMS.asc` for remote releases, downloads the
-matching snapshot manifest, and invokes the fast-start bootstrap wrapper. The
-installer keeps its temporary download cache in a sibling
+against `SHA256SUMS` and `SHA256SUMS.asc` for remote releases, imports the
+published `BTX-RELEASE-PUBKEY.asc` when the release advertises one, downloads
+the matching snapshot manifest, and invokes the fast-start bootstrap wrapper.
+The installer keeps its temporary download cache in a sibling
 `<install-dir>-agent-setup-cache` directory unless you override `--cache-dir`.
 For private GitHub releases, set `BTX_GITHUB_TOKEN`, `GITHUB_TOKEN`, or
 `GH_TOKEN` before running the installer so it can authenticate the manifest and
@@ -83,6 +84,14 @@ btx-cli getchainstates
 
 Once the snapshot chainstate is active, wallet and mining RPCs become usable
 without waiting for a full historical sync.
+
+Native preview archives also include lightweight launch wrappers around
+`btxd` and `btx-cli`. If a required shared library is missing, those wrappers
+stop immediately with install hints instead of leaving the operator with a raw
+dynamic-loader error. Current native previews still rely on:
+
+- Linux: libevent runtime packages, plus `libsqlite3` and `libzmq5` for `btxd`
+- macOS: Homebrew `libevent` for native preview builds
 
 If you prefer a one-command bootstrap flow, the scripts under
 `contrib/faststart/` can consume the same published bundle directly.

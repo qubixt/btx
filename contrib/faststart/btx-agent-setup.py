@@ -274,12 +274,33 @@ def parse_checksum_file(path: Path) -> dict[str, str]:
     return checksums
 
 
-def verify_checksum_signature(checksum_path: Path, signature_path: Path, gpg_bin: str) -> None:
-    result = subprocess.run(
-        [gpg_bin, "--verify", str(signature_path), str(checksum_path)],
-        capture_output=True,
-        text=True,
-    )
+def verify_checksum_signature(
+    checksum_path: Path,
+    signature_path: Path,
+    gpg_bin: str,
+    public_key_path: Path | None = None,
+) -> None:
+    env = os.environ.copy()
+    with tempfile.TemporaryDirectory(prefix="btx-agent-gpg-home-") as temp_home:
+        if public_key_path is not None:
+            env["GNUPGHOME"] = temp_home
+            import_result = subprocess.run(
+                [gpg_bin, "--batch", "--import", str(public_key_path)],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if import_result.returncode != 0:
+                message = import_result.stderr.strip() or import_result.stdout.strip() or "gpg --import failed"
+                raise RuntimeError(
+                    f"Checksum signature verification failed while importing {public_key_path.name}: {message}"
+                )
+        result = subprocess.run(
+            [gpg_bin, "--verify", str(signature_path), str(checksum_path)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "gpg --verify failed"
         raise RuntimeError(f"Checksum signature verification failed for {signature_path.name}: {message}")
@@ -530,13 +551,28 @@ def main(argv: list[str]) -> int:
         headers=github_asset_headers,
     )
     signature_name = manifest.get("signature_file")
+    signature_public_key_name = manifest.get("signature_public_key")
+    signature_public_key_path: Path | None = None
+    if isinstance(signature_public_key_name, str) and signature_public_key_name:
+        signature_public_key_asset = assets.get(signature_public_key_name, {})
+        signature_public_key_path = download_and_verify_asset(
+            resolved_asset_source(signature_public_key_name),
+            cache_dir / signature_public_key_name,
+            verified_asset_sha256(signature_public_key_name, signature_public_key_asset, checksums),
+            headers=github_asset_headers,
+        )
     if signature_name:
         signature_path = download_to_path(
             resolved_asset_source(signature_name),
             cache_dir / signature_name,
             headers=github_asset_headers,
         )
-        verify_checksum_signature(checksum_path, signature_path, args.gpg)
+        verify_checksum_signature(
+            checksum_path,
+            signature_path,
+            args.gpg,
+            public_key_path=signature_public_key_path,
+        )
     elif is_url(manifest_reference_source) and not args.allow_unsigned_release:
         raise KeyError(
             "release manifest does not advertise signature_file; refusing unsigned remote release "

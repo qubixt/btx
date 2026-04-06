@@ -53,7 +53,9 @@ Linux/macOS/Windows to stable platform ids such as `linux-x86_64` and
 install the right archive without hard-coding filenames. For remote release
 URLs, the installer now treats `SHA256SUMS` as the source of truth for the
 manifest, archive, and snapshot-manifest hashes, and it verifies
-`SHA256SUMS.asc` when the release advertises one. Use
+`SHA256SUMS.asc` when the release advertises one. If the release manifest also
+advertises `BTX-RELEASE-PUBKEY.asc`, the installer imports that public key into
+an isolated temporary keyring before verifying the checksum signature. Use
 `--allow-unsigned-release` only for intentionally unsigned test bundles.
 If the GitHub repository or release is private, export `BTX_GITHUB_TOKEN`,
 `GITHUB_TOKEN`, or `GH_TOKEN` before running the installer so it can
@@ -65,6 +67,11 @@ directory, the mining helpers under `contrib/mining/`, and
 `doc/btx-download-and-go.md`, so a direct archive extraction still gives the
 operator the documented fast-start entry points without needing a second repo
 checkout.
+The native preview archives also wrap `btxd` and `btx-cli` with a small
+runtime dependency check. On Linux, missing `libevent`, `libsqlite3`, or
+`libzmq5` dependencies produce an explicit package-install hint instead of a
+raw loader failure; on macOS previews, missing Homebrew `libevent` does the
+same.
 Release bundles may also publish signer-qualified Guix attestation assets under
 the manifest's `attestation_assets` list. The installer ignores those
 provenance files, but they are part of the intended operator-facing release
