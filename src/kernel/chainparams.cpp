@@ -289,6 +289,7 @@ public:
             {
                 {0, uint256{"75a998a39d2d6e25a9ca7de2cc659309c4105839c06cd435ba2b1aabf0fa4601"}},
                 {60760, uint256{"6528ebf50342363b63c17afd851a28307bc2c0fac596373ca9f59c30726d169c"}},
+                {63667, uint256{"5ecb537b93b8db73e181a87eb490a899d31c532d9d482ea525ed0b17235013fb"}},
             }
         };
         m_assumeutxo_data = {
@@ -306,11 +307,18 @@ public:
                 .m_chain_tx_count = 66'205,
                 .blockhash = consteval_ctor(uint256{"6528ebf50342363b63c17afd851a28307bc2c0fac596373ca9f59c30726d169c"}),
             },
+            {
+                // main assumeutxo snapshot at height 63'667
+                .height = 63'667,
+                .hash_serialized = AssumeutxoHash{uint256{"ae874844ded121831b9c2108767b04517db99525d6ef9e92ce8e2825b5a3cf83"}},
+                .m_chain_tx_count = 70'675,
+                .blockhash = consteval_ctor(uint256{"5ecb537b93b8db73e181a87eb490a899d31c532d9d482ea525ed0b17235013fb"}),
+            },
         };
         chainTxData = ChainTxData{
-            .nTime = 1775199100,
-            .tx_count = 66221,
-            .dTxRate = 0.019766869333,
+            .nTime = 1775461897,
+            .tx_count = 70675,
+            .dTxRate = 0.019319721796,
         };
     }
 };
