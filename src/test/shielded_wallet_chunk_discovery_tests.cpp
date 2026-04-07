@@ -288,13 +288,13 @@ struct ShieldedWalletChunkDiscoverySetup : public TestChain100Setup
     std::shared_ptr<wallet::CShieldedWallet> shielded_wallet;
     wallet::ShieldedAddress owned_addr;
     mlkem::PublicKey owned_kem_pk{};
+    SecureString passphrase{"test-passphrase"};
 
     ShieldedWalletChunkDiscoverySetup()
         : TestChain100Setup{ChainType::REGTEST},
           wallet(m_node.chain.get(), "", wallet::CreateMockableWalletDatabase())
     {
         BOOST_REQUIRE(wallet.LoadWallet() == wallet::DBErrors::LOAD_OK);
-        SecureString passphrase{"test-passphrase"};
         BOOST_REQUIRE(wallet.EncryptWallet(passphrase));
         BOOST_REQUIRE(wallet.Unlock(passphrase));
         wallet.m_shielded_wallet = std::make_shared<wallet::CShieldedWallet>(wallet);
@@ -761,6 +761,46 @@ BOOST_AUTO_TEST_CASE(imported_viewing_key_survives_wallet_mempool_to_block_callb
     BOOST_REQUIRE_EQUAL(notes.size(), 1U);
     BOOST_CHECK_EQUAL(notes.front().note.value, live_value);
     BOOST_CHECK(!notes.front().is_mine_spend);
+}
+
+BOOST_AUTO_TEST_CASE(locked_scan_owned_note_rehydrates_to_spendable_on_unlock)
+{
+    const CAmount value = 41 * COIN / 100;
+    const CTransaction tx =
+        BuildMinimalV2SendTransaction(owned_addr.pk_hash, owned_kem_pk, value, 0xf6);
+
+    CBlock block;
+    block.vtx.push_back(MakeTransactionRef(tx));
+
+    BOOST_REQUIRE(wallet.Lock());
+    {
+        LOCK2(wallet.cs_wallet, shielded_wallet->cs_shielded);
+        shielded_wallet->ScanBlock(block, /*height=*/1);
+
+        const auto notes = shielded_wallet->GetUnspentNotes(/*min_depth=*/0);
+        BOOST_REQUIRE_EQUAL(notes.size(), 1U);
+        BOOST_CHECK(!notes.front().is_mine_spend);
+
+        const auto summary = shielded_wallet->GetShieldedBalanceSummary(/*min_depth=*/0);
+        BOOST_CHECK_EQUAL(summary.spendable, 0);
+        BOOST_CHECK_EQUAL(summary.watchonly, value);
+    }
+
+    BOOST_REQUIRE(wallet.Unlock(passphrase));
+    {
+        LOCK2(wallet.cs_wallet, shielded_wallet->cs_shielded);
+        BOOST_CHECK(shielded_wallet->MaybeRehydrateSpendingKeys());
+
+        const auto notes = shielded_wallet->GetUnspentNotes(/*min_depth=*/0);
+        BOOST_REQUIRE_EQUAL(notes.size(), 1U);
+        BOOST_CHECK(notes.front().is_mine_spend);
+
+        const auto summary = shielded_wallet->GetShieldedBalanceSummary(/*min_depth=*/0);
+        BOOST_CHECK_EQUAL(summary.spendable, value);
+        BOOST_CHECK_EQUAL(summary.watchonly, 0);
+        BOOST_CHECK_EQUAL(shielded_wallet->GetShieldedBalance(/*min_depth=*/0), value);
+        BOOST_REQUIRE_EQUAL(shielded_wallet->GetSpendableNotes(/*min_depth=*/0).size(), 1U);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(block_scan_deduplicates_v2_send_commitments_across_transactions)

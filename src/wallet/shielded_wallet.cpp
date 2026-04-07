@@ -5361,6 +5361,127 @@ int CShieldedWallet::GetChainTipHeight() const
     return tip.value_or(0);
 }
 
+const ShieldedKeySet* CShieldedWallet::FindLoadedSpendingKeysetForRecipient(
+    const uint256& recipient_pk_hash) const
+{
+    AssertLockHeld(cs_shielded);
+    for (const auto& [_, keyset] : m_key_sets) {
+        if (!keyset.has_spending_key || !keyset.spending_key_loaded || !keyset.spending_key.IsValid()) continue;
+        if (keyset.spending_pk_hash == recipient_pk_hash) return &keyset;
+    }
+    return nullptr;
+}
+
+std::optional<Nullifier> CShieldedWallet::ComputeOwnedNullifier(
+    const ShieldedCoin& coin,
+    const std::vector<unsigned char>& master_seed,
+    const ShieldedKeySet& keyset) const
+{
+    AssertLockHeld(cs_shielded);
+    if (master_seed.empty()) return std::nullopt;
+
+    if (coin.account_leaf_hint.has_value() && coin.account_leaf_hint->IsValid()) {
+        const auto smile_nullifier = smile2::wallet::ComputeSmileNullifierFromNote(
+            smile2::wallet::SMILE_GLOBAL_SEED,
+            coin.note);
+        if (smile_nullifier.has_value()) return *smile_nullifier;
+    }
+
+    std::vector<unsigned char> spend_secret = DeriveShieldedSpendSecretMaterial(master_seed, keyset);
+    ScopedByteVectorCleanse spend_secret_cleanse(spend_secret);
+    if (spend_secret.empty()) return std::nullopt;
+
+    Nullifier spend_nullifier;
+    if (!shielded::ringct::DeriveInputNullifierForNote(
+            spend_nullifier,
+            Span<const unsigned char>{spend_secret.data(), spend_secret.size()},
+            coin.note,
+            coin.commitment)) {
+        return std::nullopt;
+    }
+    return spend_nullifier;
+}
+
+size_t CShieldedWallet::RepairOwnedNoteSpendMetadataForMap(
+    std::map<Nullifier, ShieldedCoin>& note_map,
+    const char* map_name,
+    const std::vector<unsigned char>& master_seed)
+{
+    AssertLockHeld(cs_shielded);
+    size_t repaired_count{0};
+    for (auto it = note_map.begin(); it != note_map.end();) {
+        const Nullifier old_nullifier = it->first;
+        ShieldedCoin repaired_coin = it->second;
+
+        const ShieldedKeySet* signing_keyset =
+            FindLoadedSpendingKeysetForRecipient(repaired_coin.note.recipient_pk_hash);
+        if (signing_keyset == nullptr) {
+            ++it;
+            continue;
+        }
+
+        const auto expected_nullifier =
+            ComputeOwnedNullifier(repaired_coin, master_seed, *signing_keyset);
+        if (!expected_nullifier.has_value()) {
+            ++it;
+            continue;
+        }
+
+        if (repaired_coin.is_mine_spend && *expected_nullifier == old_nullifier) {
+            ++it;
+            continue;
+        }
+
+        const auto collision_it = note_map.find(*expected_nullifier);
+        if (*expected_nullifier != old_nullifier &&
+            collision_it != note_map.end() &&
+            collision_it != it) {
+            LogPrintf("CShieldedWallet::RepairOwnedNoteSpendMetadata skipping %s note commitment=%s due to nullifier collision\n",
+                      map_name,
+                      repaired_coin.commitment.ToString());
+            ++it;
+            continue;
+        }
+
+        repaired_coin.is_mine_spend = true;
+        repaired_coin.nullifier = *expected_nullifier;
+
+        if (*expected_nullifier == old_nullifier) {
+            it->second = std::move(repaired_coin);
+            ++it;
+        } else {
+            auto erase_it = it++;
+            note_map.erase(erase_it);
+            note_map.emplace(*expected_nullifier, std::move(repaired_coin));
+            if (m_spent_nullifiers.erase(old_nullifier) > 0) {
+                m_spent_nullifiers.insert(*expected_nullifier);
+            }
+            if (m_pending_spends.erase(old_nullifier) > 0) {
+                m_pending_spends.insert(*expected_nullifier);
+            }
+        }
+        ++repaired_count;
+    }
+    return repaired_count;
+}
+
+bool CShieldedWallet::RepairOwnedNoteSpendMetadata(const std::vector<unsigned char>& master_seed)
+{
+    AssertLockHeld(cs_shielded);
+    if (master_seed.empty()) return false;
+
+    const size_t repaired_confirmed =
+        RepairOwnedNoteSpendMetadataForMap(m_notes, "confirmed", master_seed);
+    const size_t repaired_mempool =
+        RepairOwnedNoteSpendMetadataForMap(m_mempool_notes, "mempool", master_seed);
+    if (repaired_confirmed == 0 && repaired_mempool == 0) return false;
+
+    LogPrintf("CShieldedWallet::RepairOwnedNoteSpendMetadata repaired %u confirmed and %u mempool note(s)\n",
+              static_cast<unsigned int>(repaired_confirmed),
+              static_cast<unsigned int>(repaired_mempool));
+    return true;
+}
+
 std::vector<ShieldedCoin> CShieldedWallet::SelectNotes(CAmount target,
                                                        CAmount fee,
                                                        bool prefer_minimal_inputs) const
@@ -5943,6 +6064,10 @@ void CShieldedWallet::LoadPersistedState()
             m_spent_nullifiers.insert(restored.nullifier);
         }
     }
+    if (!master_seed.empty()) {
+        const bool repaired_owned_notes = RepairOwnedNoteSpendMetadata(master_seed);
+        (void)repaired_owned_notes;
+    }
     for (const auto& [commitment, witness] : state.witnesses) {
         m_witnesses[commitment] = witness;
     }
@@ -6114,33 +6239,40 @@ bool CShieldedWallet::MaybeRehydrateSpendingKeys()
             break;
         }
     }
-    if (!have_missing_spending_keys) {
-        return rehydrated;
-    }
-
     std::vector<unsigned char> master_seed = GetMasterSeed();
     ScopedByteVectorCleanse master_seed_cleanse_rehydrate(master_seed);
-    if (master_seed.empty()) {
+    if (have_missing_spending_keys && master_seed.empty()) {
         return rehydrated;
     }
 
-    bool loaded_any{false};
-    for (auto& [addr, keyset] : m_key_sets) {
-        if (!keyset.has_spending_key || keyset.spending_key_loaded) {
-            continue;
+    if (have_missing_spending_keys) {
+        bool loaded_any{false};
+        for (auto& [addr, keyset] : m_key_sets) {
+            if (!keyset.has_spending_key || keyset.spending_key_loaded) {
+                continue;
+            }
+            if (!DeriveSpendingKeyForKeyset(master_seed, keyset)) {
+                LogPrintf("CShieldedWallet::MaybeRehydrateSpendingKeys dropping invalid spending authority for addr=%s\n",
+                          addr.Encode());
+                keyset.has_spending_key = false;
+                continue;
+            }
+            loaded_any = true;
         }
-        if (!DeriveSpendingKeyForKeyset(master_seed, keyset)) {
-            LogPrintf("CShieldedWallet::MaybeRehydrateSpendingKeys dropping invalid spending authority for addr=%s\n",
-                      addr.Encode());
-            keyset.has_spending_key = false;
-            continue;
+
+        if (loaded_any) {
+            LogPrintf("CShieldedWallet::MaybeRehydrateSpendingKeys rebuilt spend authorities; rescanning active chain\n");
+            RebuildFromActiveChain();
+            m_locked_state_incomplete = false;
+            rehydrated = true;
+            return rehydrated;
         }
-        loaded_any = true;
     }
 
-    if (loaded_any) {
-        LogPrintf("CShieldedWallet::MaybeRehydrateSpendingKeys rebuilt spend authorities; rescanning active chain\n");
-        RebuildFromActiveChain();
+    if (!master_seed.empty() && RepairOwnedNoteSpendMetadata(master_seed)) {
+        if (!PersistState()) {
+            LogPrintf("CShieldedWallet: failed to persist state after repairing owned note spend metadata\n");
+        }
         m_locked_state_incomplete = false;
         rehydrated = true;
     }
