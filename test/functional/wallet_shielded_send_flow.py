@@ -14,6 +14,10 @@ from test_framework.shielded_utils import (
 from test_framework.util import assert_equal, assert_raises_rpc_error
 
 
+LIVE_DIRECT_LIMIT = 8
+STABLE_TEST_SEND_INPUTS = 2
+
+
 class WalletShieldedSendFlowTest(BitcoinTestFramework):
     def add_options(self, parser):
         self.add_wallet_options(parser)
@@ -24,8 +28,8 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
         self.extra_args = [["-autoshieldcoinbase=0"]]
         # The functional framework halves this value when creating the live RPC
         # connection, so use a larger headroom for the slowest debug-build
-        # 2-input shielded send/unshield proofs.
-        self.rpc_timeout = 1200
+        # 8-input shielded send/unshield proofs.
+        self.rpc_timeout = 1800
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -44,10 +48,11 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
         funder = encrypt_and_unlock_wallet(node, "funder")
 
         def compact_to_live_direct_spend_envelope(shielded_wallet):
-            while shielded_wallet.z_getbalance()["note_count"] > 2:
-                merge = shielded_wallet.z_mergenotes(8)
+            while shielded_wallet.z_getbalance()["note_count"] > STABLE_TEST_SEND_INPUTS:
+                merge = shielded_wallet.z_mergenotes(LIVE_DIRECT_LIMIT)
                 assert merge["txid"] in node.getrawmempool()
-                assert_equal(merge["merged_notes"], 2)
+                assert merge["merged_notes"] >= 2
+                assert merge["merged_notes"] <= LIVE_DIRECT_LIMIT
                 assert_equal(shielded_wallet.z_viewtransaction(merge["txid"])["family"], "v2_send")
                 self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
 
@@ -100,25 +105,25 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
         assert_equal(receiver.z_viewtransaction(multi_input_send["txid"])["family"], "v2_send")
         self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
 
-        self.log.info("Surface a clear error once a direct shielded send would need more than two notes")
+        self.log.info("Surface a clear error once a direct shielded send would need more than the live input cap")
         overflow_addr = receiver.z_getnewaddress()
-        for amount in [Decimal("0.12"), Decimal("0.13"), Decimal("0.14")]:
-            funder.z_sendmany([{"address": overflow_addr, "amount": amount}])
+        for _ in range(LIVE_DIRECT_LIMIT + 1):
+            funder.z_sendmany([{"address": overflow_addr, "amount": Decimal("0.05")}])
             self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
         overflow_dest = wallet.z_getnewaddress()
         assert_raises_rpc_error(
             -4,
-            "direct shielded send currently supports at most 2 shielded inputs; merge notes first",
+            "selected note count exceeds live direct shielded spend limit",
             receiver.z_sendmany,
-            [{"address": overflow_dest, "amount": Decimal("0.30")}],
+            [{"address": overflow_dest, "amount": Decimal("0.44")}],
         )
 
-        self.log.info("Pairwise note merges recover the receiver wallet into the live direct-send envelope")
+        self.log.info("Iterated note merges recover the receiver wallet into the live direct-send envelope")
         compact_to_live_direct_spend_envelope(receiver)
         recovered_dest = wallet.z_getnewaddress()
         recovered_send = receiver.z_sendmany([{"address": recovered_dest, "amount": Decimal("0.30")}])
         assert recovered_send["txid"] in node.getrawmempool()
-        assert recovered_send["spends"] <= 2
+        assert recovered_send["spends"] <= STABLE_TEST_SEND_INPUTS
         assert_equal(receiver.z_viewtransaction(recovered_send["txid"])["family"], "v2_send")
         self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
 
@@ -135,7 +140,7 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
             stress_dest = wallet.z_getnewaddress()
             stress_send = stress_receiver.z_sendmany([{"address": stress_dest, "amount": Decimal("0.40")}])
             assert stress_send["txid"] in node.getrawmempool()
-            assert stress_send["spends"] <= 2
+            assert stress_send["spends"] <= LIVE_DIRECT_LIMIT
             assert_equal(stress_receiver.z_viewtransaction(stress_send["txid"])["family"], "v2_send")
             self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
 
@@ -168,7 +173,7 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
             stress_t_dest = stress_unshielder.getnewaddress()
             stress_unshield = stress_unshielder.z_sendmany([{"address": stress_t_dest, "amount": Decimal("0.35")}])
             assert stress_unshield["txid"] in node.getrawmempool()
-            assert stress_unshield["spends"] <= 2
+            assert stress_unshield["spends"] <= LIVE_DIRECT_LIMIT
             assert_equal(stress_unshielder.z_viewtransaction(stress_unshield["txid"])["family"], "v2_send")
             self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
             assert_equal(stress_unshielder.getreceivedbyaddress(stress_t_dest), Decimal("0.35"))

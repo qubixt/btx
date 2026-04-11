@@ -2735,8 +2735,11 @@ std::optional<ShieldedSpendSelectionEstimate> CShieldedWallet::EstimateDirectSpe
     }
 
     const size_t ring_size = GetConfiguredShieldedRingSize();
+    if (selected.size() > shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS) {
+        return fail("selected note count exceeds live direct shielded spend limit");
+    }
     if (selected.size() > ring_size) {
-        return fail("selected note count exceeds SMILE shared ring limit");
+        return fail("selected note count exceeds configured shielded ring size");
     }
 
     CAmount total_input{0};
@@ -2797,10 +2800,10 @@ std::optional<ShieldedSpendSelectionEstimate> CShieldedWallet::EstimateDirectSpe
         return fail("selected note count exceeds v2 spend limit");
     }
     if (selected.size() > shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS) {
-        return fail("direct shielded send currently supports at most 2 shielded inputs; merge notes first");
+        return fail("selected note count exceeds live direct shielded spend limit");
     }
-    if (selected.size() > shielded::lattice::RING_SIZE) {
-        return fail("selected note count exceeds SMILE shared ring limit");
+    if (selected.size() > ring_size) {
+        return fail("selected note count exceeds configured shielded ring size");
     }
 
     const size_t shielded_output_count = shielded_recipients.size() + (change > 0 ? 1 : 0);
@@ -2949,8 +2952,11 @@ std::optional<CMutableTransaction> CShieldedWallet::CreateV2Send(
 
     auto& selected = selection.selected;
     CAmount change = selection.change;
+    if (selected.size() > shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS) {
+        return fail("selected note count exceeds live direct shielded spend limit");
+    }
     if (selected.size() > ring_size) {
-        return fail("selected note count exceeds SMILE shared ring limit");
+        return fail("selected note count exceeds configured shielded ring size");
     }
 
     if (!m_tree.HasCommitmentIndex()) {
@@ -3026,10 +3032,10 @@ std::optional<CMutableTransaction> CShieldedWallet::CreateV2Send(
         return fail("selected note count exceeds v2 spend limit");
     }
     if (selected.size() > shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS) {
-        return fail("direct shielded send currently supports at most 2 shielded inputs; merge notes first");
+        return fail("selected note count exceeds live direct shielded spend limit");
     }
-    if (selected.size() > shielded::lattice::RING_SIZE) {
-        return fail("selected note count exceeds SMILE shared ring limit");
+    if (selected.size() > ring_size) {
+        return fail("selected note count exceeds configured shielded ring size");
     }
     const size_t output_count = selection.shielded_output_count;
     if (output_count > shielded::v2::MAX_DIRECT_OUTPUTS) {
@@ -5023,8 +5029,10 @@ std::optional<CMutableTransaction> CShieldedWallet::UnshieldFunds(CAmount amount
 
 std::optional<CMutableTransaction> CShieldedWallet::MergeNotes(size_t max_notes, CAmount fee, std::string* error)
 {
+    static constexpr size_t MAX_LIVE_MERGE_NOTES_PER_TX{2};
     AssertLockHeld(cs_shielded);
     MaybeRehydrateSpendingKeys();
+    CatchUpToChainTip();
     if (!RequireEncryptedShieldedWallet(m_parent_wallet, "CShieldedWallet::MergeNotes", error)) {
         return std::nullopt;
     }
@@ -5076,7 +5084,7 @@ std::optional<CMutableTransaction> CShieldedWallet::MergeNotes(size_t max_notes,
         const size_t merge_count =
             std::min({max_notes,
                       group_notes.size(),
-                      static_cast<size_t>(shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS)});
+                      MAX_LIVE_MERGE_NOTES_PER_TX});
         if (merge_count < 2) continue;
 
         std::vector<ShieldedCoin> selected_group(group_notes.begin(), group_notes.begin() + merge_count);
