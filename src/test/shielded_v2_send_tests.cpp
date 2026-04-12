@@ -1612,6 +1612,118 @@ BOOST_AUTO_TEST_CASE(build_v2_send_transaction_supports_multi_input_shared_smile
     BOOST_CHECK(!v2proof::VerifyV2SendProof(*bundle, *context, {shared_smile_ring_members, drifted_ring}));
 }
 
+BOOST_AUTO_TEST_CASE(build_v2_send_transaction_supports_max_live_inputs_with_two_outputs)
+{
+    constexpr size_t ring_size{16};
+    constexpr size_t spend_count{shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS};
+    const std::vector<unsigned char> spending_key(32, 0x8A);
+
+    std::vector<ShieldedNote> input_notes;
+    input_notes.reserve(spend_count);
+    std::vector<size_t> real_indices;
+    real_indices.reserve(spend_count);
+    std::vector<std::pair<size_t, uint256>> real_members;
+    real_members.reserve(spend_count);
+    std::vector<uint256> input_chain_commitments;
+    input_chain_commitments.reserve(spend_count);
+
+    for (size_t i = 0; i < spend_count; ++i) {
+        const ShieldedNote note = MakeNote(/*value=*/3000 + static_cast<CAmount>(i * 25),
+                                           static_cast<unsigned char>(0x40 + i));
+        input_notes.push_back(note);
+        real_indices.push_back(i);
+        const auto input_account = smile2::wallet::BuildCompactPublicAccountFromNote(
+            smile2::wallet::SMILE_GLOBAL_SEED,
+            note);
+        BOOST_REQUIRE(input_account.has_value());
+        const uint256 chain_commitment = smile2::ComputeCompactPublicAccountHash(*input_account);
+        input_chain_commitments.push_back(chain_commitment);
+        real_members.emplace_back(i, chain_commitment);
+    }
+
+    const shielded::ShieldedMerkleTree tree = BuildTree(real_members, ring_size);
+    const std::vector<uint64_t> ring_positions = BuildRingPositions(ring_size);
+    const std::vector<uint256> ring_members = BuildRingMembers(tree, ring_positions);
+
+    std::vector<smile2::wallet::SmileRingMember> shared_smile_ring_members;
+    shared_smile_ring_members.reserve(ring_members.size());
+    for (const auto& commitment : ring_members) {
+        shared_smile_ring_members.push_back(
+            smile2::wallet::BuildPlaceholderRingMember(smile2::wallet::SMILE_GLOBAL_SEED, commitment));
+    }
+    for (size_t i = 0; i < spend_count; ++i) {
+        auto real_member = smile2::wallet::BuildRingMemberFromNote(smile2::wallet::SMILE_GLOBAL_SEED,
+                                                                   input_notes[i],
+                                                                   input_chain_commitments[i]);
+        BOOST_REQUIRE(real_member.has_value());
+        shared_smile_ring_members[real_indices[i]] = *real_member;
+    }
+
+    std::vector<shielded::v2::V2SendSpendInput> spend_inputs;
+    spend_inputs.reserve(spend_count);
+    for (size_t i = 0; i < spend_count; ++i) {
+        spend_inputs.push_back(MakeDirectSpendInput(input_notes[i],
+                                                    ring_positions,
+                                                    ring_members,
+                                                    real_indices[i],
+                                                    input_chain_commitments[i],
+                                                    shared_smile_ring_members));
+    }
+    BOOST_REQUIRE(test::shielded::AttachAccountRegistryWitnesses(spend_inputs));
+
+    const ShieldedNote output_note_a = MakeNote(/*value=*/9000, /*seed=*/0x90);
+    const ShieldedNote output_note_b = MakeNote(/*value=*/15100, /*seed=*/0xA0);
+    const mlkem::KeyPair recipient_a = BuildRecipientKeyPair(/*seed=*/0xB0);
+    const mlkem::KeyPair recipient_b = BuildRecipientKeyPair(/*seed=*/0xC0);
+    auto encrypted_payload_a = shielded::v2::EncodeLegacyEncryptedNotePayload(
+        BuildEncryptedNote(output_note_a, recipient_a.pk, /*kem_seed_byte=*/0xD0, /*nonce_byte=*/0xE0),
+        recipient_a.pk,
+        shielded::v2::ScanDomain::USER);
+    auto encrypted_payload_b = shielded::v2::EncodeLegacyEncryptedNotePayload(
+        BuildEncryptedNote(output_note_b, recipient_b.pk, /*kem_seed_byte=*/0xD1, /*nonce_byte=*/0xE1),
+        recipient_b.pk,
+        shielded::v2::ScanDomain::USER);
+    BOOST_REQUIRE(encrypted_payload_a.has_value());
+    BOOST_REQUIRE(encrypted_payload_b.has_value());
+
+    shielded::v2::V2SendOutputInput output_input_a;
+    output_input_a.note_class = shielded::v2::NoteClass::USER;
+    output_input_a.note = output_note_a;
+    output_input_a.encrypted_note = *encrypted_payload_a;
+
+    shielded::v2::V2SendOutputInput output_input_b;
+    output_input_b.note_class = shielded::v2::NoteClass::USER;
+    output_input_b.note = output_note_b;
+    output_input_b.encrypted_note = *encrypted_payload_b;
+
+    std::array<unsigned char, 32> rng_entropy{};
+    rng_entropy.fill(0x6C);
+    std::string reject_reason;
+    auto built = shielded::v2::BuildV2SendTransaction(CMutableTransaction{},
+                                                      tree.Root(),
+                                                      spend_inputs,
+                                                      {output_input_a, output_input_b},
+                                                      /*fee=*/600,
+                                                      spending_key,
+                                                      reject_reason,
+                                                      Span<const unsigned char>{rng_entropy.data(),
+                                                                                rng_entropy.size()});
+    BOOST_REQUIRE_MESSAGE(built.has_value(), reject_reason);
+    BOOST_REQUIRE(built->witness.use_smile);
+
+    const auto* bundle = built->tx.shielded_bundle.GetV2Bundle();
+    BOOST_REQUIRE(bundle != nullptr);
+    const auto statement = v2proof::DescribeV2SendStatement(CTransaction{built->tx});
+    BOOST_REQUIRE(statement.IsValid());
+    auto context = v2proof::ParseV2SendProof(*bundle, statement, reject_reason);
+    BOOST_REQUIRE_MESSAGE(context.has_value(), reject_reason);
+    BOOST_CHECK(v2proof::VerifyV2SendProof(*bundle,
+                                           *context,
+                                           std::vector<std::vector<smile2::wallet::SmileRingMember>>(
+                                               spend_count,
+                                               shared_smile_ring_members)));
+}
+
 BOOST_AUTO_TEST_CASE(build_v2_send_transaction_uses_smile_commitments_for_direct_smile_outputs)
 {
     const std::vector<unsigned char> spending_key(32, 0x5A);

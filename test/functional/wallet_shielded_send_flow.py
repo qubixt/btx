@@ -127,6 +127,39 @@ class WalletShieldedSendFlowTest(BitcoinTestFramework):
         assert_equal(receiver.z_viewtransaction(recovered_send["txid"])["family"], "v2_send")
         self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
 
+        self.log.info("Exercise an 8-note live merge on a fresh receiver-only wallet")
+        node.createwallet(wallet_name="mergeprobe", descriptors=True)
+        mergeprobe = encrypt_and_unlock_wallet(node, "mergeprobe")
+        mergeprobe_addr = mergeprobe.z_getnewaddress()
+        for _ in range(LIVE_DIRECT_LIMIT):
+            funder.z_sendmany([{"address": mergeprobe_addr, "amount": Decimal("0.07")}])
+            self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
+        assert_equal(mergeprobe.z_getbalance()["note_count"], LIVE_DIRECT_LIMIT)
+        mergeprobe_merge = mergeprobe.z_mergenotes(LIVE_DIRECT_LIMIT)
+        assert mergeprobe_merge["txid"] in node.getrawmempool()
+        assert_equal(mergeprobe_merge["merged_notes"], LIVE_DIRECT_LIMIT)
+        assert_equal(mergeprobe.z_viewtransaction(mergeprobe_merge["txid"])["family"], "v2_send")
+        self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
+        assert_equal(mergeprobe.z_getbalance()["note_count"], 1)
+
+        self.log.info("Canonical fee path: z_mergenotes rounds a non-bucket fee before computing the merged output")
+        node.createwallet(wallet_name="mergecanonicalfee", descriptors=True)
+        mergecanonicalfee = encrypt_and_unlock_wallet(node, "mergecanonicalfee")
+        mergecanonicalfee_addr = mergecanonicalfee.z_getnewaddress()
+        for _ in range(LIVE_DIRECT_LIMIT):
+            funder.z_sendmany([{"address": mergecanonicalfee_addr, "amount": Decimal("0.07")}])
+            self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
+        assert_equal(mergecanonicalfee.z_getbalance()["note_count"], LIVE_DIRECT_LIMIT)
+        mergecanonicalfee_merge = mergecanonicalfee.z_mergenotes(
+            LIVE_DIRECT_LIMIT,
+            Decimal("0.00131619"),
+        )
+        assert mergecanonicalfee_merge["txid"] in node.getrawmempool()
+        assert_equal(mergecanonicalfee_merge["merged_notes"], LIVE_DIRECT_LIMIT)
+        assert_equal(mergecanonicalfee.z_viewtransaction(mergecanonicalfee_merge["txid"])["family"], "v2_send")
+        self.generatetoaddress(node, 1, mine_addr, sync_fun=self.no_op)
+        assert_equal(mergecanonicalfee.z_getbalance()["note_count"], 1)
+
         self.log.info("Stress supported multi-input sends on fresh receiver-only wallets")
         for iteration in range(2):
             wallet_name = f"receiverstress{iteration}"

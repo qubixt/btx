@@ -2754,46 +2754,48 @@ std::optional<ShieldedSpendSelectionEstimate> CShieldedWallet::EstimateDirectSpe
     if (total_input < total_needed) return fail("selected input below total needed");
 
     CAmount change = total_input - total_needed;
-    const bool reserve_shielded_change =
-        change == 0 &&
-        selected.size() > 1 &&
-        shielded_recipients.size() == 1 &&
-        transparent_recipients.empty();
+    const bool prefer_shielded_change_reserve =
+        PreferExactBalanceShieldedChangeReserve(change,
+                                                selected.size(),
+                                                shielded_recipients.size(),
+                                                transparent_recipients.size());
+    const bool require_change_reserve =
+        change == 0 && shielded_recipients.empty() && !transparent_recipients.empty();
     if (selected_override == nullptr &&
-        ((change == 0 && shielded_recipients.empty() && !transparent_recipients.empty()) ||
-         reserve_shielded_change)) {
+        (require_change_reserve || prefer_shielded_change_reserve)) {
         const auto reserved_target = CheckedAdd(total_needed, CAmount{1});
         if (!reserved_target || !MoneyRange(*reserved_target)) {
-            return fail(reserve_shielded_change
-                            ? "shielded send change reserve overflow"
-                            : "unshield change reserve overflow");
-        }
-
-        auto reserved_selection = SelectNotes(*reserved_target, fee, prefer_minimal_inputs);
-        if (reserved_selection.empty()) {
-            return fail(reserve_shielded_change
-                            ? "exact-balance shielded send requires at least 1 sat change reserve"
-                            : "exact-balance unshield requires at least 1 sat change reserve");
-        }
-
-        CAmount reserved_total{0};
-        for (const auto& coin : reserved_selection) {
-            if (!IsShieldedAmountCompatible(coin.note.value)) {
-                return fail("selected note has invalid amount");
+            if (require_change_reserve) {
+                return fail("unshield change reserve overflow");
             }
-            const auto next = CheckedAdd(reserved_total, coin.note.value);
-            if (!next || !MoneyRange(*next)) return fail("selected input total overflow");
-            reserved_total = *next;
         }
-        if (reserved_total < *reserved_target) {
-            return fail(reserve_shielded_change
-                            ? "exact-balance shielded send requires at least 1 sat change reserve"
-                            : "exact-balance unshield requires at least 1 sat change reserve");
-        }
+        if (reserved_target && MoneyRange(*reserved_target)) {
+            auto reserved_selection = SelectNotes(*reserved_target, fee, prefer_minimal_inputs);
+            CAmount reserved_total{0};
+            bool reserved_selection_valid{!reserved_selection.empty()};
+            for (const auto& coin : reserved_selection) {
+                if (!IsShieldedAmountCompatible(coin.note.value)) {
+                    return fail("selected note has invalid amount");
+                }
+                const auto next = CheckedAdd(reserved_total, coin.note.value);
+                if (!next || !MoneyRange(*next)) return fail("selected input total overflow");
+                reserved_total = *next;
+            }
+            reserved_selection_valid =
+                reserved_selection_valid &&
+                reserved_total >= *reserved_target &&
+                (!prefer_shielded_change_reserve ||
+                 SelectionFitsDirectShieldedSpendLimits(reserved_selection.size(), ring_size));
 
-        selected = std::move(reserved_selection);
-        total_input = reserved_total;
-        change = total_input - total_needed;
+            if (reserved_selection_valid) {
+                selected = std::move(reserved_selection);
+                total_input = reserved_total;
+                change = total_input - total_needed;
+            }
+            if (!reserved_selection_valid && require_change_reserve) {
+                return fail("exact-balance unshield requires at least 1 sat change reserve");
+            }
+        }
     }
 
     if (selected.size() > shielded::v2::MAX_DIRECT_SPENDS) {
@@ -2971,59 +2973,63 @@ std::optional<CMutableTransaction> CShieldedWallet::CreateV2Send(
 
     CAmount total_input = selection.total_input;
     const bool prefer_minimal_inputs = !transparent_recipients.empty();
-    const bool reserve_shielded_change =
-        change == 0 &&
-        selected.size() > 1 &&
-        shielded_recipients.size() == 1 &&
-        transparent_recipients.empty();
+    const bool prefer_shielded_change_reserve =
+        PreferExactBalanceShieldedChangeReserve(change,
+                                                selected.size(),
+                                                shielded_recipients.size(),
+                                                transparent_recipients.size());
     const bool dust_change_needs_reserve =
         shielded_dust_threshold > 0 &&
         change > 0 &&
         change < minimum_change_reserve;
+    const bool require_change_reserve =
+        (change == 0 && shielded_recipients.empty() && !transparent_recipients.empty()) ||
+        dust_change_needs_reserve;
     if (selected_override == nullptr &&
-        ((change == 0 && shielded_recipients.empty() && !transparent_recipients.empty()) ||
-         dust_change_needs_reserve ||
-         reserve_shielded_change)) {
+        (require_change_reserve || prefer_shielded_change_reserve)) {
         const auto reserved_target = CheckedAdd(
             selection.total_needed,
-            dust_change_needs_reserve || reserve_shielded_change || !shielded_recipients.empty()
+            dust_change_needs_reserve || prefer_shielded_change_reserve || !shielded_recipients.empty()
                 ? minimum_change_reserve
                 : CAmount{1});
         if (!reserved_target || !MoneyRange(*reserved_target)) {
-            return fail(reserve_shielded_change
-                            ? "shielded send change reserve overflow"
-                            : "unshield change reserve overflow");
-        }
-        auto reserved_selection = SelectNotes(*reserved_target, fee, prefer_minimal_inputs);
-        if (reserved_selection.empty()) {
-            return fail(dust_change_needs_reserve
-                            ? "shielded send requires change above the post-fork dust threshold"
-                            : (reserve_shielded_change
-                                   ? "exact-balance shielded send requires post-fork change reserve"
-                                   : "exact-balance unshield requires post-fork change reserve"));
-        }
-        CAmount reserved_total{0};
-        for (const auto& coin : reserved_selection) {
-            if (!IsShieldedAmountCompatible(coin.note.value)) {
-                return fail("selected note has invalid amount");
+            if (require_change_reserve) {
+                return fail(shielded_recipients.empty()
+                                ? "unshield change reserve overflow"
+                                : "shielded send change reserve overflow");
             }
-            const auto next = CheckedAdd(reserved_total, coin.note.value);
-            if (!next || !MoneyRange(*next)) return fail("selected input total overflow");
-            reserved_total = *next;
         }
-        if (reserved_total < *reserved_target) {
-            return fail(dust_change_needs_reserve
-                            ? "shielded send requires change above the post-fork dust threshold"
-                            : (reserve_shielded_change
-                                   ? "exact-balance shielded send requires post-fork change reserve"
-                                   : "exact-balance unshield requires post-fork change reserve"));
+        if (reserved_target && MoneyRange(*reserved_target)) {
+            auto reserved_selection = SelectNotes(*reserved_target, fee, prefer_minimal_inputs);
+            CAmount reserved_total{0};
+            bool reserved_selection_valid{!reserved_selection.empty()};
+            for (const auto& coin : reserved_selection) {
+                if (!IsShieldedAmountCompatible(coin.note.value)) {
+                    return fail("selected note has invalid amount");
+                }
+                const auto next = CheckedAdd(reserved_total, coin.note.value);
+                if (!next || !MoneyRange(*next)) return fail("selected input total overflow");
+                reserved_total = *next;
+            }
+            reserved_selection_valid =
+                reserved_selection_valid &&
+                reserved_total >= *reserved_target &&
+                (!prefer_shielded_change_reserve ||
+                 SelectionFitsDirectShieldedSpendLimits(reserved_selection.size(), ring_size));
+            if (reserved_selection_valid) {
+                selected = std::move(reserved_selection);
+                total_input = reserved_total;
+                change = total_input - selection.total_needed;
+                selection.total_input = total_input;
+                selection.change = change;
+                selection.shielded_output_count = shielded_recipients.size() + (change > 0 ? 1 : 0);
+            }
+            if (!reserved_selection_valid && require_change_reserve) {
+                return fail(dust_change_needs_reserve
+                                ? "shielded send requires change above the post-fork dust threshold"
+                                : "exact-balance unshield requires post-fork change reserve");
+            }
         }
-        selected = std::move(reserved_selection);
-        total_input = reserved_total;
-        change = total_input - selection.total_needed;
-        selection.total_input = total_input;
-        selection.change = change;
-        selection.shielded_output_count = shielded_recipients.size() + (change > 0 ? 1 : 0);
     }
     if (shielded_dust_threshold > 0 && change > 0 && change < minimum_change_reserve) {
         return fail("shielded change would fall below the post-fork dust threshold");
@@ -3331,7 +3337,8 @@ std::optional<CMutableTransaction> CShieldedWallet::CreateV2Send(
             &consensus,
             validation_height);
         memory_cleanse(proof_rng_entropy.data(), proof_rng_entropy.size());
-        if (built.has_value() || reject_reason != "bad-shielded-v2-builder-proof") {
+        if (built.has_value() ||
+            reject_reason.rfind("bad-shielded-v2-builder-proof", /*pos=*/0) != 0) {
             break;
         }
         LogDebug(BCLog::WALLETDB,
@@ -5029,10 +5036,16 @@ std::optional<CMutableTransaction> CShieldedWallet::UnshieldFunds(CAmount amount
 
 std::optional<CMutableTransaction> CShieldedWallet::MergeNotes(size_t max_notes, CAmount fee, std::string* error)
 {
-    static constexpr size_t MAX_LIVE_MERGE_NOTES_PER_TX{2};
+    static constexpr size_t MAX_LIVE_MERGE_NOTES_PER_TX{
+        static_cast<size_t>(shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS)};
     AssertLockHeld(cs_shielded);
     MaybeRehydrateSpendingKeys();
     CatchUpToChainTip();
+    const int32_t validation_height = NextShieldedBuildValidationHeight(m_parent_wallet.chain());
+    fee = shielded::RoundShieldedFeeToCanonicalBucket(
+        fee,
+        Params().GetConsensus(),
+        validation_height);
     if (!RequireEncryptedShieldedWallet(m_parent_wallet, "CShieldedWallet::MergeNotes", error)) {
         return std::nullopt;
     }
@@ -5087,19 +5100,43 @@ std::optional<CMutableTransaction> CShieldedWallet::MergeNotes(size_t max_notes,
                       MAX_LIVE_MERGE_NOTES_PER_TX});
         if (merge_count < 2) continue;
 
-        std::vector<ShieldedCoin> selected_group(group_notes.begin(), group_notes.begin() + merge_count);
-        CAmount total{0};
-        bool overflow{false};
-        for (const auto& coin : selected_group) {
-            const auto next = CheckedAdd(total, coin.note.value);
-            if (!next || !MoneyRange(*next)) {
-                last_error = "Merge input total overflow";
-                overflow = true;
-                break;
+        auto select_total = [&](std::vector<ShieldedCoin>& selected,
+                                std::vector<ShieldedCoin>::const_iterator begin_it,
+                                std::vector<ShieldedCoin>::const_iterator end_it,
+                                CAmount& sum_out) {
+            selected.assign(begin_it, end_it);
+            sum_out = 0;
+            for (const auto& coin : selected) {
+                const auto next = CheckedAdd(sum_out, coin.note.value);
+                if (!next || !MoneyRange(*next)) {
+                    last_error = "Merge input total overflow";
+                    return false;
+                }
+                sum_out = *next;
             }
-            total = *next;
+            return true;
+        };
+
+        std::vector<ShieldedCoin> selected_group;
+        CAmount total{0};
+        if (!select_total(selected_group,
+                          group_notes.begin(),
+                          group_notes.begin() + merge_count,
+                          total)) {
+            continue;
         }
-        if (overflow) continue;
+
+        // Prefer collapsing the smallest notes first, but if that prefix cannot
+        // fund the fixed merge fee, fall back to a fee-viable slice so miner
+        // wallets with lots of dust can still make consolidation progress.
+        if (total <= fee && group_notes.size() > merge_count) {
+            if (!select_total(selected_group,
+                              group_notes.end() - merge_count,
+                              group_notes.end(),
+                              total)) {
+                continue;
+            }
+        }
 
         const CAmount merged_value = total - fee;
         if (merged_value <= 0) {

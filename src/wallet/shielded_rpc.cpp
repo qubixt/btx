@@ -8498,11 +8498,11 @@ RPCHelpMan z_mergenotes()
     return RPCHelpMan{
         "z_mergenotes",
         "\nMerge several small shielded notes into one.\n"
-        "The merge path deliberately uses a conservative pairwise live-spend envelope,\n"
+        "The merge path stays inside the live direct-spend envelope,\n"
         "so repeated calls may still be required when a wallet holds many small notes.\n"
         "This is the supported wallet-level consolidation path for high-note-count miner wallets.\n",
         {
-            {"max_notes", RPCArg::Type::NUM, RPCArg::Default{10}, "Maximum notes requested for merge (the current live merge path uses up to 2 notes per tx)"},
+            {"max_notes", RPCArg::Type::NUM, RPCArg::Default{10}, "Maximum notes requested for merge (the current live merge path uses up to 8 notes per tx)"},
             {"fee", RPCArg::Type::AMOUNT, RPCArg::Default{FormatMoney(10000)}, "Fee"},
         },
         RPCResult{
@@ -8564,6 +8564,7 @@ RPCHelpMan z_mergenotes()
                                                          static_cast<size_t>(shielded::v2::MAX_LIVE_DIRECT_SMILE_SPENDS)});
                                 mtx = pwallet->m_shielded_wallet->MergeNotes(max_notes, fee, &create_error);
                                 if (mtx.has_value()) {
+                                    merged_count = mtx->shielded_bundle.GetShieldedInputCount();
                                     reserved_nullifiers = CollectShieldedNullifiers(mtx->shielded_bundle);
                                     pwallet->m_shielded_wallet->ReservePendingSpends(reserved_nullifiers);
                                 }

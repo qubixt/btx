@@ -1386,7 +1386,9 @@ enum class PersistedShieldedMetadataSyncMode {
     return true;
 }
 
-[[nodiscard]] bool AuditShieldedStateAgainstChain(const Chainstate& chainstate, std::string& error)
+[[nodiscard]] bool AuditShieldedStateAgainstChain(const Chainstate& chainstate,
+                                                  std::string& error,
+                                                  bool include_proof_audit = true)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
@@ -1497,9 +1499,11 @@ enum class PersistedShieldedMetadataSyncMode {
         }
     }
 
-    shielded::audit::ProofAuditArchive proof_archive;
-    if (!BuildShieldedProofAuditArchive(chainstate, chainstate.m_chain.Tip(), proof_archive, error)) {
-        return false;
+    if (include_proof_audit) {
+        shielded::audit::ProofAuditArchive proof_archive;
+        if (!BuildShieldedProofAuditArchive(chainstate, chainstate.m_chain.Tip(), proof_archive, error)) {
+            return false;
+        }
     }
     return true;
 }
@@ -1511,6 +1515,11 @@ bool BuildShieldedProofAuditArchive(const Chainstate& chainstate,
                                     shielded::audit::ProofAuditArchive& archive,
                                     std::string& error)
 {
+    auto make_non_owning_snapshot = [](const auto& value) {
+        using Value = std::decay_t<decltype(value)>;
+        return std::shared_ptr<const Value>(&value, [](const Value*) {});
+    };
+
     archive.entries.clear();
     archive.verified_count = 0;
     archive.failed_count = 0;
@@ -1554,9 +1563,9 @@ bool BuildShieldedProofAuditArchive(const Chainstate& chainstate,
                 *txref,
                 chainstate.m_chainman.GetConsensus(),
                 pindex->nHeight,
-                std::make_shared<const shielded::ShieldedMerkleTree>(tree),
-                std::make_shared<const std::map<uint256, smile2::CompactPublicAccount>>(public_accounts),
-                std::make_shared<const std::map<uint256, uint256>>(account_leaf_commitments));
+                make_non_owning_snapshot(tree),
+                make_non_owning_snapshot(public_accounts),
+                make_non_owning_snapshot(account_leaf_commitments));
             if (const auto reject_reason = proof_check(); reject_reason.has_value()) {
                 entry.reject_reason = *reject_reason;
                 archive.failed_count += 1;
@@ -10714,7 +10723,9 @@ bool ChainstateManager::EnsureShieldedStateInitialized()
                 return false;
             }
             std::string audit_error;
-            if (!AuditShieldedStateAgainstChain(*m_active_chainstate, audit_error)) {
+            if (!AuditShieldedStateAgainstChain(*m_active_chainstate,
+                                               audit_error,
+                                               /*include_proof_audit=*/false)) {
                 LogPrintf("EnsureShieldedStateInitialized: prepared mutation marker audit failed (%s); rebuilding full state from chain\n",
                           audit_error);
                 m_shielded_state_initialized = false;
@@ -10939,7 +10950,9 @@ bool ChainstateManager::EnsureShieldedStateInitialized()
             }
             m_shielded_state_initialized = true;
             std::string audit_error;
-            if (!AuditShieldedStateAgainstChain(*m_active_chainstate, audit_error)) {
+            if (!AuditShieldedStateAgainstChain(*m_active_chainstate,
+                                               audit_error,
+                                               /*include_proof_audit=*/false)) {
                 LogPrintf("EnsureShieldedStateInitialized: persisted shielded state audit failed (%s); rebuilding full state from chain\n",
                           audit_error);
                 m_shielded_merkle_tree = shielded::ShieldedMerkleTree{};
